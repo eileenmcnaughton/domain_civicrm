@@ -1,0 +1,4 @@
+name = Domain CiviCRM
+description = Create multisite domains for CiviCRM
+package = CiviCRM
+core = 6.x

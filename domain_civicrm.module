@@ -1,0 +1,307 @@
+<?php
+/* 
+ *Module creates civicrm multisites
+ */
+
+
+function domain_civicrm_create_multisite( $org_name, $org_desc , $siteurl, $parent_group_id = null) {
+    
+  if(empty($org_name) || empty($org_desc) || empty($siteurl)){
+    drupal_set_message( t("args not provided"));
+    return;  
+  }
+
+    if ( ! civicrm_initialize( ) ) {
+        return;
+    }
+
+    $params = array('organization_name'          => $org_name,
+                    'domain_name'    				     => $org_name,
+                    'group_name'    				     => $org_name,     
+                    'organization_description'	 => $org_desc,
+                    'domain_description'	       => $org_desc,
+                    'group_description'	         => $org_desc,
+                    'site_url' 									 => $siteurl,
+                    'parent_group_id'						 => $parent_group_id, 
+                    );
+    $multisite = _domain_civicrm_create_multisite_entities($params);
+
+
+
+    if(!domain_civicrm_load_sql($multisite['domain_id'])){
+      echo "didn't load sql";
+    }
+    
+    domain_civicrm_save(array('civicrm_domain_id' => $multisite['domain_id'],
+                              'civicrm_group_id'  => $multisite['group_id'] ,
+                              'civicrm_org_id'    => $multisite['organization_id']  ,
+                              'civicrm_site_name' => $org_name,
+                              'site_url'				  => $siteurl  ));
+    
+   print (domain_civicrm_print_settings());
+}
+
+/*
+ * Create the entities required for a multisite - domain, group, organisation, nesting
+ * @param array $params array of relevant entities ie. 
+ * 
+ *     $params = array('organization_name'          => $org_name,
+                    'domain_name'    				     => $org_name,
+                    'group_name'    				     => $org_name,     
+                    'organization_description'	 => $org_desc,
+                    'group_description'	         => $org_desc,
+                    'site_url' 									 => $siteurl,
+                    'parent_group_id'						 => $parent_group_id, 
+ * @return array $multisite array of created entity IDs
+ */
+
+function _domain_civicrm_create_multisite_entities($params){
+      require_once('api/api.php');
+      $multisite = array();
+      
+      #create the domain
+      $multisite ['domain_id']  = _domain_civicrm_get_existing_entityID($params['domain_name'], 'name', 'Domain');
+      if (empty($multisite ['domain_id'])){
+        $multisite ['domain_id']  =   _domain_civicrm_create_subdomain($params);
+      }  
+      
+      # create the group
+      $multisite['group_id']  = _domain_civicrm_get_existing_entityID($params['group_name'], 'title', 'Group');
+      if (empty($multisite ['group_id'])){
+         $group_params = array('version'       => 3, 
+         												'title'        => $params['group_name'], 
+         												'description'  => $params['group_description'],
+                                'is_active'    => 1,
+                                'group_type'   => '1');
+        $group = civicrm_api('group', 'create', $group_params );
+        $multisite['group_id'] = $group['id'];
+      }        
+
+      # create the group nesting 
+      require_once 'CRM/Utils/Array.php';
+      require_once 'CRM/Core/BAO/Domain.php';
+      //if parent ID is not provided the domain group for the current site will be used
+      $multisite['parent_group_id'] = CRM_Utils_Array::value('parent_group_id',$params,CRM_Core_BAO_Domain::getGroupId( ));
+      $multisite['group_nesting_id'] =  _domain_civicrm_get_existing_entityID($multisite['group_id'], 'child_group_id', 'GroupNesting');
+      if (empty($multisite['group_nesting_id'])){
+          $group_nesting = civicrm_api('group_nesting', 'create', array ('child_group_id' => $multisite['group_id'],
+                                                                         'version' =>3, 	
+                                                                         'parent_group_id' => $multisite['parent_group_id']) );
+      }
+        
+      #create the org (in all honesty I don't know what the org does but still)
+      $multisite['organization_id'] =  _domain_civicrm_get_existing_entityID($params['organization_name'], 'organization_name', 'Contact');
+      if (empty($multisite['organization_id'])){
+         $org_params = array('version' => 3,'organization_name' => $params['organization_name'],
+         'contact_type' => 'Organization','sequential' => 1);
+         // this is a double check since the prev doesn't check for multiple matches - may remove this or the prev check
+         $org = civicrm_api('contact', 'get', $org_params);
+         if($org['count'] >1 ){
+           $errors[] = ("too many orgs matching that name for me to pick one");
+           return;
+        }elseif ($org['count'] ==0){
+          $org = civicrm_api('contact', 'create', $org_params);
+          $multisite['organization_id']  = $org['id'];   
+        }
+      }
+      
+       # create the group-org link
+       $multisite['group_organization_id'] =  _domain_civicrm_get_existing_entityID($multisite['organization_id'], 'organization_id', 'group_organization');
+       if (empty($multisite['group_organization_id'])){
+         $group_org_id = civicrm_api('group_organization', 'create',  
+                                 array('version' => 3,
+         													'group_id' => $multisite['group_id'],
+         													'organization_id' => $multisite['organization_id']));
+        $multisite['group_organization_id'] = $group_org_id['id'];
+       }
+
+      
+    return $multisite;
+      
+}
+
+/*
+ * Check if the entity exists before trying to create - if so return id
+ */
+function _domain_civicrm_get_existing_entityID($field,$fieldName, $entity){
+  $result = civicrm_api($entity,'Get', array('version' => 3, $fieldName => $field  ));
+  return $result['id']; 
+}
+
+/*
+ * Try to create entity - if all good return ID
+ */
+function _domain_civicrm_create_subdomain($params){
+    $existing_domain = civicrm_api('domain', 'get', array('version' => 3, 'sequential' =>1));
+    $domain_params = array('name' => $params['domain_name'],  'description' => $params['description'],'version' =>3,
+        'domain_version' => $existing_domain['values'][0]['version']);
+    $domain_params['config_backend'] = unserialize($existing_domain['config_backend']);
+    $keysToUnset = array('configAndLogDir', 
+    										 'uploadDir' ,    
+    										 'imageUploadDir' ,
+    										 'customFileUploadDir',
+                         'imageUploadURL',
+                         'userFrameworkResourceURL');
+    foreach ($keysToUnset as $key ) {
+     unset( $domain_params['config_backend'][$key]);
+    }
+    
+    $domain = civicrm_api('domain', 'create', $domain_params);
+   
+    if($domain['is_error'] ==1){
+      //most probably domain exists - don't rely on error message staying the same - just try a get
+      $domain = civicrm_api('domain', 'get', array('version' => 3, 'name' => $org_name));
+      if (!$domain['count'] ==1){
+        return null;
+      }
+    }
+
+    return  $domain['id'];
+}
+/*
+ * Save a record in the domain_civicrm table. Also add domain record for domain access
+ */
+function domain_civicrm_save($civicrm_domain){
+    $record = new stdClass();
+    $record->civicrm_domain_id = $civicrm_domain['civicrm_domain_id'];
+    $record->civicrm_group_id  = $civicrm_domain['civicrm_group_id'];
+    $record->civicrm_org_id    = $civicrm_domain['civicrm_org_id'];     
+
+    if(module_exists('domain')){
+    $domain = db_result(db_query("SELECT domain_id FROM {domain} WHERE sitename = '%s'", $civicrm_domain['civicrm_site_name']));
+    if(!empty($domain)){
+      $record->domainid = $domain;
+    }else{
+      //create domain
+      $values = array('subdomain' => $civicrm_domain['site_url'],'sitename' => $civicrm_domain['civicrm_site_name'], 'valid' =>1, 'scheme' => 'http');
+      $domainget = domain_save($values, $edit); 
+      $record->domainid = $domainget['domain_id'];
+    }
+    }
+    
+    $dcid = db_result(db_query("SELECT dcid FROM {domain_civicrm} WHERE civicrm_domain_id = %d", $civicrm_domain['civicrm_domain_id']));
+    if(!empty($dcid)){
+      $update = 'dcid';
+      $record->dcid = $dcid;
+    }
+    drupal_write_record('domain_civicrm',$record,$update);
+}
+
+/*
+ * Load domain specific sql - navigation menu & sql
+ */
+function domain_civicrm_load_sql($domainID){
+  global $civicrm_root ;
+  global  $crmPath;
+  $crmPath = $civicrm_root;
+  $countNav =  db_result(db_query("SELECT COUNT(id) from {civicrm_navigation} WHERE domain_id = '%s'",$domainID));
+  if ($countNav ==0){
+
+    $sql = file_get_contents($civicrm_root. "/sql/civicrm_navigation.mysql");
+    $newtext = "id = " .$domainID;
+    $oldtext = "name = 'Default Domain Name'";
+    $sql = str_replace($oldtext,$newtext,$sql);
+    $sqltempfile = file_directory_temp() . "/civinav.sql";
+    file_put_contents($sqltempfile	 ,$sql);
+    require_once('install/civicrm.php');
+      civicrm_source(CIVICRM_DSN,$sqltempfile,false);
+    
+    }
+  $countNav =  db_result(db_query("SELECT COUNT(id) from {civicrm_navigation} WHERE domain_id = '%s'",$domainID));
+  if ($countNav > 200){
+    return true; 
+  }
+}
+
+/*
+ * Generate settings text to go in civicrm settings file
+ */
+function domain_civicrm_print_settings(){
+ $sql =  "SELECT civicrm_domain_id, civicrm_group_id, civicrm_org_id,subdomain FROM {domain_civicrm} dc LEFT JOIN {domain} d ON dc.domainid = d.domain_id";
+
+ $settingstext = 'Add or modify the following lines in the appropriate civicrm.settings.php file<br>
+
+  <br>define( \'CIVICRM_MULTISITE\', 1 );<br>
+  <br>global $_domain; <br> <br>
+  if (!empty($_domain[\'subdomain\'] )) {<br>
+    &nbsp switch ($_domain[\'subdomain\']){<br>
+    ';
+ $result = db_query($sql);
+     while ($domains = db_fetch_array( $result)) {
+
+   $settingstext .= '
+    &nbsp case \''.  $domains['subdomain'] . '\'    :<br>
+    &nbsp &nbsp define( \'CIVICRM_DOMAIN_ID\'      , '.  $domains['civicrm_domain_id'] . ' );<br>
+    &nbsp &nbsp define( \'CIVICRM_DOMAIN_GROUP_ID\','.  $domains['civicrm_group_id']. ' );<br>
+    &nbsp &nbsp define( \'CIVICRM_DOMAIN_ORG_ID\'  , '.  $domains['civicrm_org_id'] . '  );<br>
+    &nbsp &nbsp define( \'CIVICRM_UF_BASEURL\'      , \'http://'.  $domains['subdomain'] . '/\' );<br>
+    &nbsp break;<br>
+    
+';
+ }
+
+    $settingstext .= '&nbsp default :<br><br>
+    
+    
+    }<br>}';
+    return $settingstext;
+
+}
+function domain_civicrm_create() {
+  $form['domain_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Domain Name'),
+    '#size' => 60,
+    '#required' => TRUE,
+  );
+  $form['domain_description'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Organisation Description'),
+    '#size' => 60,
+    '#required' => TRUE,
+  );
+   $form['domain_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Designated URL'),
+    '#size' => 60,
+    '#required' => TRUE,
+  );
+  return $form;
+}
+
+function domain_civicrm_create_submit($form, &$form_state) {
+  $values = $form_state['values'];
+  domain_civicrm_create_multisite( $values['domain_name'], $values['domain_description'], $values['domain_url']);
+ // $form_state['redirect'] = 'user';
+  return;
+}
+
+/**
+ * Implementation of hook_menu().
+ *
+ * @return An array of menu items.
+ */
+function domain_civicrm_menu() {
+  $items = array();
+
+  $items['domain_civicrm_create'] = array(
+    'title' => 'Create',
+    'description' => 'Create new domains',
+    'page callback' => 'domain_civicrm_create_multisite',
+    'page arguments' => array(),
+    'access arguments' => array('administer CiviCRM'),
+  );
+  $items['domain_civicrm'] = array(
+    'title' => 'Add Domains',
+    'description' => 'Create new domains',
+    'page callback' => 'domain_civicrm_create',
+    'page arguments' => array(),
+    'type' => MENU_CALLBACK,
+    'access arguments' => array('administer CiviCRM'),
+  );
+
+  return $items;
+}
+
+
+?>

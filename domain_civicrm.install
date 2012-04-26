@@ -1,0 +1,68 @@
+<?php
+
+/**
+ * @file
+ */
+
+/**
+ * Implementation of hook_schema().
+ */
+function domain_civicrm_schema() {
+  $schema['domain_civicrm'] = array(
+    'description' => 'Domains using multisite.',
+    'fields' => array(
+      'dcid' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Unique ID for civicrm_domain table.',
+      ),
+      'domainid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'Domain access domain ID.',
+      ),
+      'civicrm_domain_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'CiviCRM Domain ID',
+      ),
+
+      'civicrm_group_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'CiviCRM Group ID',
+      ),
+      'civicrm_org_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'description' => 'CiviCRM Organisation ID',
+      ),
+    ),  
+    'primary key' => array('dcid'),
+  );
+
+
+  return $schema;
+}
+
+/**
+ * Implementation of hook_install().
+ */
+function domain_civicrm_install() {
+  // Create tables
+  drupal_install_schema('domain_civicrm');
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function domain_civicrm_uninstall() {
+  // Remove tables
+  drupal_uninstall_schema('domain_civicrm');
+}
+
