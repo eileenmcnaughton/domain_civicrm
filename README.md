@@ -2,7 +2,11 @@ domain_civicrm
 ==============
 
 alpha module for creating civicrm domains
+To create a domain use the command
 
+domain_civicrm_create_multisite( 'California', 'ca' , 'ca.xxxx.dev.fuzion.co.nz' );
+
+or go to http://xxx.fuzion.co.nz/comain_create/California/ca/ca.xxxx.dev.fuzion.co.nz
 
 global $_domain;
 
